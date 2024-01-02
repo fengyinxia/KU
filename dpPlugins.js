@@ -1,8 +1,13 @@
 window.dpPlugins = window.dpPlugins || function (t) {
-    var obj = {};
+    var obj = {
+        version: '1.1.3'
+    };
 
     obj.init = function (player, option) {
         obj = Object.assign(option || {}, obj);
+
+        window.m3u8Parser || obj.loadJs("https://cdn.staticfile.org/m3u8-parser/7.1.0/m3u8-parser.min.js");
+        window.localforage || obj.loadJs("https://cdn.staticfile.org/localforage/1.10.0/localforage.min.js");
 
         obj.ready(player).then(() => {
             t.forEach((k) => {
@@ -84,18 +89,22 @@ window.dpPlugins = window.dpPlugins || function (t) {
         return element;
     };
 
+    console.info("\n %c dpPlugins v" + obj.version + " %c https://scriptcat.org/zh-CN/users/13895 \n", "color: #fadfa3; background: #030307; padding:5px 0;", "background: #fadfa3; padding:5px 0;");
+
     return obj;
 }([
     class HlsEvents {
         constructor(player) {
             this.player = player;
             this.hls = this.player.plugins.hls;
+            this.now = Date.now();
+            this.currentTime = 0;
 
             if (!this.player.events.type('video_end')) {
                 this.player.events.playerEvents.push('video_end');
             }
             this.player.on('video_end', () => {
-                this.switchVideo();
+                this.switchUrl();
             });
 
             this.player.on('quality_end', () => {
@@ -116,68 +125,102 @@ window.dpPlugins = window.dpPlugins || function (t) {
             this.onEvents();
         }
 
-        switchVideo() {
-            const { paused, currentTime, playbackRate, muted } = this.player.video;
-            const videoHTML = '<video class="dplayer-video" webkit-playsinline playsinline crossorigin="anonymous" preload="auto" src="' + this.player.quality.url + '"><track kind="metadata" default src=""></track></video>';
-            const videoEle = new DOMParser().parseFromString(videoHTML, 'text/html').body.firstChild;
-            this.player.template.videoWrap.insertBefore(videoEle, this.player.template.videoWrap.getElementsByTagName('div')[0]);
-            this.player.prevVideo = this.player.video;
-            this.player.video = videoEle;
-            this.player.initVideo(this.player.video, this.player.quality.type || this.player.options.video.type);
+        switchUrl() {
+            if (this.hls && this.hls.hasOwnProperty('data') && this.hls.levelController && !this.hls.levelController.currentLevelIndex) {
+                const url = this.player.quality.url;
+                this.hls.url = this.hls.levelController.currentLevel.url[0] = url;
+                fetch(url).then((response) => {
+                    return response.ok ? response.text() : Promise.reject();
+                }).then((data) => {
+                    window.m3u8Parser = window.m3u8Parser || unsafeWindow.m3u8Parser;
+                    const parser = new window.m3u8Parser.Parser();
+                    parser.push(data);
+                    parser.end();
 
-            this.player.video.onloadeddata = () => {
-                this.player.video.onloadeddata = null;
-                this.player.video.currentTime = this.player.prevVideo.currentTime;
-            };
+                    const vidUrl = url.replace(/media.m3u8.+/, "");
+                    const segments = parser.manifest.segments;
+                    const fragments = this.hls.levelController.currentLevel.details.fragments;
+                    fragments.forEach(function (item, index) {
+                        const segment = segments[index];
+                        Object.assign(item, {
+                            baseurl: url,
+                            relurl: segment.uri,
+                            url: vidUrl + segment.uri,
+                        });
+                    });
 
-            const now = Date.now();
-            this.player.video.oncanplaythrough = () => {
-                this.player.video.oncanplaythrough = null;
-                this.player.video.currentTime = Math.max(this.player.prevVideo.currentTime, currentTime + (Date.now() - now) / 1000);
-                this.player.video.muted = muted;
-                this.player.speed(playbackRate);
-
-                if (!paused) {
-                    this.player.play();
-                }
-
-                this.player.video.onplaying = () => {
-                    this.player.video.onplaying = null;
-                    this.player.video.currentTime = Math.max(this.player.prevVideo.currentTime, currentTime + (Date.now() - now) / 1000);
-                    this.player.controller.hide();
-
-                    this.player.prevVideo.pause();
-                    this.player.template.videoWrap.removeChild(this.player.prevVideo);
-                    this.player.template.video = this.player.video;
-                    this.player.video.classList.add('dplayer-video-current');
-                    this.player.prevVideo = null;
-
-                    while (this.player.template.videoWrap.querySelectorAll('video').length > 1) {
-                        this.player.template.videoWrap.removeChild(this.player.template.videoWrap.getElementsByTagName('video')[1]);
-                    }
-
-                    this.player.events.trigger('quality_end');
-                };
-            };
+                    this.hls.startLoad(this.player.video.currentTime);
+                    this.onEvents();
+                });
+            }
         }
 
         onEvents() {
-            const Hls = window.Hls;
+            const Hls = window.Hls || unsafeWindow.Hls;
+            if (!this.hls) {
+                this.player = window.player || unsafeWindow.player;
+                this.hls = this.player.plugins.hls;
+            }
             this.hls.once(Hls.Events.ERROR, (event, data) => {
-                if (this.isUrlExpires(data?.frag?.relurl || data?.response?.url || this.hls.url)) {
-                    this.player.events.trigger('video_start');
+                if (this.hls.media.currentTime > 0) {
+                    this.currentTime = this.hls.media.currentTime;
+                }
+                if (data.fatal) {
+                    this.player.notice(`当前带宽: ${Math.round(this.hls.bandwidthEstimate / 1024 / 1024 / 8 * 100) / 100} MB/s`);
+                    setTimeout(this.onEvents, 3e3);
+                    switch (data.type) {
+                        case Hls.ErrorTypes.NETWORK_ERROR:
+                            if (data.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR || data.details === Hls.ErrorDetails.MANIFEST_LOAD_TIMEOUT || data.details === Hls.ErrorDetails.MANIFEST_PARSING_ERROR) {
+                                this.hls.loadSource(this.hls.url)
+                            }
+                            else if (data.details === Hls.ErrorDetails.FRAG_LOAD_ERROR) {
+                                this.hls.loadSource(this.hls.url);
+                                this.hls.media.currentTime = this.currentTime;
+                                this.hls.media.play();
+                            }
+                            else {
+                                this.hls.startLoad();
+                            }
+                            break;
+                        case Hls.ErrorTypes.MEDIA_ERROR:
+                            this.hls.recoverMediaError();
+                            break;
+                        default:
+                            this.player.notice('视频播放异常，请刷新重试');
+                            this.hls.destroy();
+                            break;
+                    }
                 }
                 else {
-                    this.onEvents();
+                    switch (data.type) {
+                        case Hls.ErrorTypes.NETWORK_ERROR:
+                            if (data.details === Hls.ErrorDetails.FRAG_LOAD_ERROR) {
+                                if (this.isUrlExpires(this.hls.url)) {
+                                    this.now = Date.now();
+                                    this.player.events.trigger('video_start');
+                                    return;
+                                }
+                            }
+                            this.onEvents();
+                            break;
+                        default:
+                            this.onEvents();
+                            break;
+                    }
                 }
             });
-        };
+        }
 
         isUrlExpires(e) {
             var t = arguments.length > 1 && void 0 !== arguments[1] ? arguments[1] : 6e3
-                , n = e.match(/&x-oss-expires=(\d+)&/);
-            return !n || n && n[1] && +"".concat(n[1], "000") - t < Date.now();
-        };
+            , n = e.match(/&x-oss-expires=(\d+)&/);
+            if (n) {
+                return +"".concat(n[1], "000") - t < Date.now();
+            }
+            else {
+                return Date.now() - this.now > 300 * 1000 - t;
+            }
+        }
     },
     class ImageEnhancer {
         constructor(player, obj) {
@@ -213,6 +256,7 @@ window.dpPlugins = window.dpPlugins || function (t) {
         constructor(player, obj) {
             this.player = player;
             this.Joysound = window.Joysound || unsafeWindow.Joysound;
+            this.localforage = window.localforage || unsafeWindow.localforage;
             this.joySound = null;
             this.offset = null;
 
@@ -266,6 +310,12 @@ window.dpPlugins = window.dpPlugins || function (t) {
             });
 
             this.player.on("playing", () => {
+                this.localforage.getItem("playing").then((data) => {
+                    if ((data = data || 0, ++data < 1e3)) {
+                        this.player.plugins.hls.data = true;
+                        this.localforage.setItem("playing", data);
+                    }
+                });
                 if (!this.player.video.joySound) {
                     this.init();
                 }
@@ -369,6 +419,8 @@ window.dpPlugins = window.dpPlugins || function (t) {
         constructor(player, obj) {
             this.player = player;
 
+            if (!(Array.isArray(this.player.options.fileList) && this.player.options.fileList.length > 1 && this.player.options.file)) return;
+
             if (!this.player.events.type('episode_end')) {
                 this.player.events.playerEvents.push('episode_end');
             }
@@ -376,114 +428,96 @@ window.dpPlugins = window.dpPlugins || function (t) {
                 this.switchVideo();
             });
 
-            if (Array.isArray(this.player.options.fileList) && this.player.options.fileList.length > 1 && this.player.options.file) {
-                this.player.fileIndex = (this.player.options.fileList || []).findIndex((item, index) => {
-                    return item.file_id === this.player.options.file.file_id;
-                });
+            this.player.fileIndex = (this.player.options.fileList || []).findIndex((item, index) => {
+                return item.file_id === this.player.options.file.file_id;
+            });
 
-                obj.prepend(this.player.template.controller.querySelector('.dplayer-icons-right'), '<style>.episode .content{max-width: 360px;max-height: 330px;width: auto;height: auto;box-sizing: border-box;overflow: hidden auto;position: absolute;left: 0px;transition: all 0.38s ease-in-out 0s;bottom: 52px;transform: scale(0);z-index: 2;}.episode .content .list{background-color: rgba(0,0,0,.3);height: 100%;}.episode .content .video-item{color: #fff;cursor: pointer;font-size: 14px;line-height: 35px;overflow: hidden;padding: 0 10px;text-overflow: ellipsis;text-align: center;white-space: nowrap;}.episode .content .active{background-color: rgba(0,0,0,.3);color: #0df;}</style><div class="dplayer-quality episode"><button class="dplayer-icon prev-icon" title="上一集"><svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><path d="M757.527273 190.138182L382.510545 490.123636a28.020364 28.020364 0 0 0 0 43.752728l375.016728 299.985454a28.020364 28.020364 0 0 0 45.474909-21.876363V212.014545a28.020364 28.020364 0 0 0-45.474909-21.876363zM249.949091 221.509818a28.020364 28.020364 0 0 0-27.973818 27.973818v525.032728a28.020364 28.020364 0 1 0 55.994182 0V249.483636a28.020364 28.020364 0 0 0-28.020364-27.973818zM747.054545 270.242909v483.514182L444.834909 512l302.173091-241.757091z"></path></svg></button><button class="dplayer-icon dplayer-quality-icon episode-icon">选集</button><button class="dplayer-icon next-icon" title="下一集"><svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><path d="M248.506182 190.138182l374.970182 299.985454a28.020364 28.020364 0 0 1 0 43.752728L248.552727 833.861818a28.020364 28.020364 0 0 1-45.521454-21.876363V212.014545c0-23.505455 27.182545-36.538182 45.521454-21.876363z m507.485091 31.371636c15.453091 0 28.020364 12.567273 28.020363 27.973818v525.032728a28.020364 28.020364 0 1 1-55.994181 0V249.483636c0-15.453091 12.520727-27.973818 27.973818-27.973818zM258.978909 270.242909v483.514182L561.198545 512 258.978909 270.242909z"></path></svg></button><div class="content"><div class="list"></div></div></div>')
-                this.player.template.episodeButton = this.player.template.controller.querySelector('.episode .episode-icon');
-                this.player.template.episodePrevButton = this.player.template.controller.querySelector('.episode .prev-icon');
-                this.player.template.episodeNextButton = this.player.template.controller.querySelector('.episode .next-icon');
-                this.player.template.episodeContent = this.player.template.controller.querySelector('.episode .content');
-                this.player.template.episodeList = this.player.template.controller.querySelector('.episode .list');
-                this.player.options.fileList.forEach((item, index) => {
-                    obj.append(this.player.template.episodeList, '<div class="video-item" data-index="' + index + '" title="' + item.name + '">' + item.name + '</div>');
-                });
-                this.player.template.episodeVideoItems = this.player.template.controller.querySelectorAll('.episode .video-item');
+            obj.prepend(this.player.template.controller.querySelector('.dplayer-icons-right'), '<style>.episode .content{max-width: 360px;max-height: 330px;width: auto;height: auto;box-sizing: border-box;overflow: hidden auto;position: absolute;left: 0px;transition: all 0.38s ease-in-out 0s;bottom: 52px;transform: scale(0);z-index: 2;}.episode .content .list{background-color: rgba(0,0,0,.3);height: 100%;}.episode .content .video-item{color: #fff;cursor: pointer;font-size: 14px;line-height: 35px;overflow: hidden;padding: 0 10px;text-overflow: ellipsis;text-align: center;white-space: nowrap;}.episode .content .active{background-color: rgba(0,0,0,.3);color: #0df;}</style><div class="dplayer-quality episode"><button class="dplayer-icon prev-icon" title="上一集"><svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><path d="M757.527273 190.138182L382.510545 490.123636a28.020364 28.020364 0 0 0 0 43.752728l375.016728 299.985454a28.020364 28.020364 0 0 0 45.474909-21.876363V212.014545a28.020364 28.020364 0 0 0-45.474909-21.876363zM249.949091 221.509818a28.020364 28.020364 0 0 0-27.973818 27.973818v525.032728a28.020364 28.020364 0 1 0 55.994182 0V249.483636a28.020364 28.020364 0 0 0-28.020364-27.973818zM747.054545 270.242909v483.514182L444.834909 512l302.173091-241.757091z"></path></svg></button><button class="dplayer-icon dplayer-quality-icon episode-icon">选集</button><button class="dplayer-icon next-icon" title="下一集"><svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><path d="M248.506182 190.138182l374.970182 299.985454a28.020364 28.020364 0 0 1 0 43.752728L248.552727 833.861818a28.020364 28.020364 0 0 1-45.521454-21.876363V212.014545c0-23.505455 27.182545-36.538182 45.521454-21.876363z m507.485091 31.371636c15.453091 0 28.020364 12.567273 28.020363 27.973818v525.032728a28.020364 28.020364 0 1 1-55.994181 0V249.483636c0-15.453091 12.520727-27.973818 27.973818-27.973818zM258.978909 270.242909v483.514182L561.198545 512 258.978909 270.242909z"></path></svg></button><div class="content"><div class="list"></div></div></div>')
+            this.player.template.episodeButton = this.player.template.controller.querySelector('.episode .episode-icon');
+            this.player.template.episodePrevButton = this.player.template.controller.querySelector('.episode .prev-icon');
+            this.player.template.episodeNextButton = this.player.template.controller.querySelector('.episode .next-icon');
+            this.player.template.episodeContent = this.player.template.controller.querySelector('.episode .content');
+            this.player.template.episodeList = this.player.template.controller.querySelector('.episode .list');
+            this.player.options.fileList.forEach((item, index) => {
+                obj.append(this.player.template.episodeList, '<div class="video-item" data-index="' + index + '" title="' + item.name + '">' + item.name + '</div>');
+            });
+            this.player.template.episodeVideoItems = this.player.template.controller.querySelectorAll('.episode .video-item');
+            if (this.player.template.episodeVideoItems.length && this.player.fileIndex >= 0) {
                 this.player.template.episodeVideoItems[this.player.fileIndex].classList.add('active');
-
-                this.player.template.mask.addEventListener('click', () => {
-                    this.hide();
-                });
-
-                this.player.template.episodeButton.addEventListener('click', (e) => {
-                    if (this.player.template.episodeContent.style.transform === 'scale(1)') {
-                        this.hide();
-                    }
-                    else {
-                        this.show();
-                    }
-                });
-
-                this.player.template.episodeList.addEventListener('click', (e) => {
-                    if (e.target.classList.contains('video-item') && !e.target.classList.contains('active')) {
-                        this.player.template.episodeVideoItems[this.player.fileIndex].classList.remove('active');
-                        e.target.classList.add('active');
-                        this.player.fileIndex = e.target.dataset.index * 1;
-                        this.player.options.file = this.player.options.fileList[this.player.fileIndex];
-
-                        this.hide();
-                        this.player.events.trigger('episode_start');
-                        this.player.notice('准备播放：' + this.player.options.file.name, 5000);
-                    }
-                });
-
-                this.player.template.episodePrevButton.addEventListener('click', (e) => {
-                    const index = this.player.fileIndex - 1;
-                    if (index >= 0) {
-                        this.player.template.episodeVideoItems[this.player.fileIndex].classList.remove('active');
-                        this.player.template.episodeVideoItems[index].classList.add('active');
-                        this.player.fileIndex = index;
-                        this.player.options.file = this.player.options.fileList[this.player.fileIndex];
-
-                        this.hide();
-                        this.player.events.trigger('episode_start');
-                        this.player.notice('准备播放：' + this.player.options.file.name, 5000);
-                    }
-                    else {
-                        this.player.notice('没有上一集了');
-                    }
-                });
-
-                this.player.template.episodeNextButton.addEventListener('click', (e) => {
-                    const index = this.player.fileIndex + 1;
-                    if (index <= this.player.options.fileList.length - 1) {
-                        this.player.template.episodeVideoItems[this.player.fileIndex].classList.remove('active');
-                        this.player.template.episodeVideoItems[index].classList.add('active');
-                        this.player.fileIndex = index;
-                        this.player.options.file = this.player.options.fileList[this.player.fileIndex];
-
-                        this.hide();
-                        this.player.events.trigger('episode_start');
-                        this.player.notice('准备播放：' + this.player.options.file.name, 5000);
-                    }
-                    else {
-                        this.player.notice('没有下一集了');
-                    }
-                });
             }
+
+            this.player.template.mask.addEventListener('click', () => {
+                this.hide();
+            });
+
+            this.player.template.episodeButton.addEventListener('click', (e) => {
+                if (this.player.template.episodeContent.style.transform === 'scale(1)') {
+                    this.hide();
+                }
+                else {
+                    this.show();
+                }
+            });
+
+            this.player.template.episodeList.addEventListener('click', (e) => {
+                if (e.target.classList.contains('video-item') && !e.target.classList.contains('active')) {
+                    this.player.template.episodeVideoItems[this.player.fileIndex].classList.remove('active');
+                    e.target.classList.add('active');
+                    this.player.fileIndex = e.target.dataset.index * 1;
+                    this.player.options.file = this.player.options.fileList[this.player.fileIndex];
+
+                    this.hide();
+                    this.player.events.trigger('episode_start');
+                    this.player.notice('准备播放：' + this.player.options.file.name, 5000);
+                }
+            });
+
+            this.player.template.episodePrevButton.addEventListener('click', (e) => {
+                const index = this.player.fileIndex - 1;
+                if (index >= 0) {
+                    this.player.template.episodeVideoItems[this.player.fileIndex].classList.remove('active');
+                    this.player.template.episodeVideoItems[index].classList.add('active');
+                    this.player.fileIndex = index;
+                    this.player.options.file = this.player.options.fileList[this.player.fileIndex];
+
+                    this.hide();
+                    this.player.events.trigger('episode_start');
+                    this.player.notice('准备播放：' + this.player.options.file.name, 5000);
+                }
+                else {
+                    this.player.notice('没有上一集了');
+                }
+            });
+
+            this.player.template.episodeNextButton.addEventListener('click', (e) => {
+                const index = this.player.fileIndex + 1;
+                if (index <= this.player.options.fileList.length - 1) {
+                    this.player.template.episodeVideoItems[this.player.fileIndex].classList.remove('active');
+                    this.player.template.episodeVideoItems[index].classList.add('active');
+                    this.player.fileIndex = index;
+                    this.player.options.file = this.player.options.fileList[this.player.fileIndex];
+
+                    this.hide();
+                    this.player.events.trigger('episode_start');
+                    this.player.notice('准备播放：' + this.player.options.file.name, 5000);
+                }
+                else {
+                    this.player.notice('没有下一集了');
+                }
+            });
         }
 
         switchVideo() {
-            const videoHTML = '<video class="dplayer-video" webkit-playsinline playsinline crossorigin="anonymous" preload="auto" src="' + this.player.quality.url + '"><track kind="metadata" default src=""></track></video>';
-            const videoEle = new DOMParser().parseFromString(videoHTML, 'text/html').body.firstChild;
-            this.player.template.videoWrap.insertBefore(videoEle, this.player.template.videoWrap.getElementsByTagName('div')[0]);
-            this.player.prevVideo = this.player.video;
-            this.player.video = videoEle;
-            this.player.initVideo(this.player.video, this.player.quality.type || this.player.options.video.type);
-            this.player.video.currentTime = 0;
-            this.player.controller.hide();
+            this.player.switchVideo({
+                url: this.player.quality.url,
+                type: 'hls'
+            });
 
-            this.player.video.oncanplaythrough = () => {
-                this.player.video.oncanplaythrough = null;
-                this.player.video.currentTime = 0;
-                this.player.events.trigger('quality_end');
-
+            this.player.video.oncanplay = () => {
+                this.player.video.oncanplay = null;
                 this.player.play();
-                this.player.controller.hide();
 
-                if (this.player.prevVideo) {
-                    this.player.prevVideo.pause && this.player.prevVideo.pause();
-                    this.player.template.videoWrap.removeChild(this.player.prevVideo);
-                    this.player.template.video = this.player.video;
-                    this.player.video.classList.add('dplayer-video-current');
-                    this.player.prevVideo = null;
-                }
-
-                while (this.player.template.videoWrap.querySelectorAll('video').length > 1) {
-                    this.player.template.videoWrap.removeChild(this.player.template.videoWrap.getElementsByTagName('video')[1]);
-                }
+                this.player.events.trigger('quality_end');
             };
         }
 
@@ -619,9 +653,9 @@ window.dpPlugins = window.dpPlugins || function (t) {
 
         formatTime(seconds) {
             var secondTotal = Math.round(seconds)
-                , hour = Math.floor(secondTotal / 3600)
-                , minute = Math.floor((secondTotal - hour * 3600) / 60)
-                , second = secondTotal - hour * 3600 - minute * 60;
+            , hour = Math.floor(secondTotal / 3600)
+            , minute = Math.floor((secondTotal - hour * 3600) / 60)
+            , second = secondTotal - hour * 3600 - minute * 60;
             minute < 10 && (minute = "0" + minute);
             second < 10 && (second = "0" + second);
             return hour === 0 ? minute + ":" + second : hour + ":" + minute + ":" + second;
@@ -735,6 +769,23 @@ window.dpPlugins = window.dpPlugins || function (t) {
             this.color = this.get('color') || '#fff';
             this.bottom = this.get('bottom') || '40px';
             this.fontSize = this.get('fontSize') || '20px';
+
+            Object.assign(this.player.user.storageName, { specialsubtitle: "dplayer-specialsubtitle" });
+            Object.assign(this.player.user.default, { specialsubtitle: 0 });
+            this.player.user.init();
+            this.specialsubtitle = this.player.user.get("specialsubtitle");
+            if (this.specialsubtitle) {
+                return;
+            }
+            this.player.template.subtitleSpecial = obj.append(obj.query('.dplayer-setting-origin-panel', this.player.template.settingBox), '<div class="dplayer-setting-item dplayer-setting-specialsubtitle"><span class="dplayer-label">特效字幕</span><div class="dplayer-toggle"><input class="dplayer-toggle-setting-input" type="checkbox" name="dplayer-toggle"><label for="dplayer-toggle"></label></div></div>');
+            this.player.template.subtitleSpecialToggle = obj.query('input', this.player.template.subtitleSpecial);
+            this.player.template.subtitleSpecialToggle.checked = this.specialsubtitle;
+            this.player.template.subtitleSpecial.addEventListener('click', () => {
+                this.specialsubtitle = this.player.template.subtitleSpecialToggle.checked = !this.player.template.subtitleSpecialToggle.checked;
+                this.player.user.set("specialsubtitle", Number(this.specialsubtitle));
+                this.player.notice(`特效字幕： ${this.specialsubtitle ? '开启' : '关闭'}`);
+                this.specialsubtitle && location.reload();
+            });
 
             if (!player.events.type('subtitle_end')) {
                 player.events.playerEvents.push('subtitle_end');
@@ -899,6 +950,13 @@ window.dpPlugins = window.dpPlugins || function (t) {
                 event.target.value = "";
             });
 
+            const lastItemIndex = this.player.template.subtitlesItem.length - 1;
+            this.player.template.subtitlesItem[lastItemIndex].addEventListener("click", () => {
+                this.player.options.subtitle.index = lastItemIndex;
+                this.player.template.subtitle.innerHTML = `<p></p>`;
+                this.player.subtitles.subContainerHide();
+            });
+
             this.style({
                 color: this.color,
                 bottom: this.bottom,
@@ -926,8 +984,8 @@ window.dpPlugins = window.dpPlugins || function (t) {
 
                 itemNode.addEventListener('click', (event) => {
                     this.player.subtitles.hide();
-                    if (this.player.options.subtitle.index !== i) {
-                        this.player.options.subtitle.index = i;
+                    if (this.player.options.subtitle.index !== i + 1) {
+                        this.player.options.subtitle.index = i + 1;
 
                         this.player.template.subtitle.innerHTML = `<p></p>`;
                         this.switch(item);
@@ -940,7 +998,7 @@ window.dpPlugins = window.dpPlugins || function (t) {
             });
             this.player.template.subtitlesItem = this.player.template.subtitlesBox.querySelectorAll('.dplayer-subtitles-item');
 
-            if (!(this.player.video.textTracks.length && this.player.video.textTracks[0])?.cues) {
+            if (!(this.player.video.textTracks.length && this.player.video.textTracks[0]?.cues && this.player.video.textTracks[0].cues.length)) {
                 this.player.options.subtitle.index = this.player.options.subtitles.findIndex((item) => {
                     return ['cho', 'chi'].includes(item.language);
                 });
@@ -968,10 +1026,10 @@ window.dpPlugins = window.dpPlugins || function (t) {
             this.player.template.subtitle.innerHTML = `<p></p>`;
             this.player.options.subtitles = [];
             this.player.options.subtitle.url = [];
-            for (let i = 0; i < this.player.template.subtitlesItem.length - 1; i++) {
-                this.player.template.subtitlesBox.removeChild(this.player.template.subtitlesItem[i]);
+            for (let i = this.player.template.subtitlesItem.length - 2; i >= 0; i--) {
+                this.player.template.subtitlesBoxPanel.removeChild(this.player.template.subtitlesItem[i]);
             }
-            this.player.template.subtitlesItem = this.player.template.subtitlesBox.querySelectorAll('.dplayer-subtitles-item');
+            this.player.template.subtitlesItem = this.player.template.subtitlesBoxPanel.querySelectorAll('.dplayer-subtitles-item');
         }
 
         initCues(subtitleOption) {
@@ -1057,7 +1115,7 @@ window.dpPlugins = window.dpPlugins || function (t) {
 
         subParser(stext, sext, delay = 0) {
             if (!sext) {
-                sext = (stext.indexOf("->") > 0 ? "srt" : stext.indexOf("Dialogue:") > 0 ? "ass" : "").toLowerCase();
+                sext = (/\d\s?-?->\s?\d/.test(stext) ? "srt" : /^\s*\[Script Info\]\r?\n/.test(stext) && /\s*\[Events\]\r?\n/.test(stext) ? "ass" : "");
             }
             var regex, data = [], items = [];
             switch (sext) {
@@ -1065,7 +1123,7 @@ window.dpPlugins = window.dpPlugins || function (t) {
                 case "vtt":
                 case "srt":
                     stext = stext.replace(/\r/g, "");
-                    regex = /(\d+)?\n?(\d{0,2}:?\d{2}:\d{2}.\d{3}) -?-> (\d{0,2}:?\d{2}:\d{2}.\d{3})/g;
+                    regex = /(\d+)?\n?(\d{0,2}:?\d{2}:\d{2}.\d{3})\s?-?->\s?(\d{0,2}:?\d{2}:\d{2}.\d{3})/g;
                     data = stext.split(regex);
                     data.shift();
                     for (let i = 0; i < data.length; i += 4) {
@@ -1093,15 +1151,14 @@ window.dpPlugins = window.dpPlugins || function (t) {
                     }
                     return items;
                 default:
-                    console.error("未知字幕格式，无法解析");
-                    console.info(sext, stext);
+                    console.error("未知字幕格式，无法解析", stext);
                     return items;
             }
 
             function parseTimestamp(e) {
                 var t = e.split(":")
-                    , n = parseFloat(t.length > 0 ? t.pop().replace(/,/g, ".") : "00.000") || 0
-                    , r = parseFloat(t.length > 0 ? t.pop() : "00") || 0;
+                , n = parseFloat(t.length > 0 ? t.pop().replace(/,/g, ".") : "00.000") || 0
+                , r = parseFloat(t.length > 0 ? t.pop() : "00") || 0;
                 return 3600 * (parseFloat(t.length > 0 ? t.pop() : "00") || 0) + 60 * r + n;
             }
         };
@@ -1114,7 +1171,7 @@ window.dpPlugins = window.dpPlugins || function (t) {
             ].join("").replace(/[<bi\/>\r?\n]*/g, "");
 
             var e = "eng"
-                , i = (t.match(/[\u4e00-\u9fa5]/g) || []).length / t.length;
+            , i = (t.match(/[\u4e00-\u9fa5]/g) || []).length / t.length;
             (t.match(/[\u3020-\u303F]|[\u3040-\u309F]|[\u30A0-\u30FF]|[\u31F0-\u31FF]/g) || []).length / t.length > .03 ? e = "jpn" : i > .1 && (e = "zho");
             return e;
         };
@@ -1197,11 +1254,616 @@ window.dpPlugins = window.dpPlugins || function (t) {
             return subtitle;
         }
     },
+    class Libass {
+        constructor(player, obj) {
+            this.player = player;
+            this.loadJs = obj.loadJs;
+            this.libass = null;
+            this.fontData = null;
+            this.hasSubtitleTrack = false;
+            this.hasSubtitleDisplay = false;
+            this.offset = 0;
+            this.offsetStep = 1;
+            this.color = -256;
+            this.fontSize = 20;
+            this.bottom = 10;
+
+            Object.assign(this.player.user.storageName, { libass: "dplayer-libass" });
+            Object.assign(this.player.user.default, { libass: 0 });
+            this.player.user.init();
+            if (!this.player.user.get("libass")) {
+                this.player.user.set("libass", 1);
+                alert('阿里云盘插件更新提醒\n\n内部支持库版本：' + obj.version + '\n本次更新支持特效字幕（ass/ssa）格式\n请在播放器菜单内开启体验\n\n为了使字幕更加美观，可能会请求本地字体权限，请予以授权');
+            }
+
+            Object.assign(this.player.user.storageName, { specialsubtitle: "dplayer-specialsubtitle" });
+            Object.assign(this.player.user.default, { specialsubtitle: 0 });
+            this.player.user.init();
+            this.specialsubtitle = this.player.user.get("specialsubtitle");
+            if (!this.specialsubtitle) {
+                return;
+            }
+            this.player.template.subtitleSpecial = obj.append(obj.query('.dplayer-setting-origin-panel', this.player.template.settingBox), '<div class="dplayer-setting-item dplayer-setting-specialsubtitle"><span class="dplayer-label">特效字幕</span><div class="dplayer-toggle"><input class="dplayer-toggle-setting-input" type="checkbox" name="dplayer-toggle"><label for="dplayer-toggle"></label></div></div>');
+            this.player.template.subtitleSpecialToggle = obj.query('input', this.player.template.subtitleSpecial);
+            this.player.template.subtitleSpecialToggle.checked = this.specialsubtitle;
+            this.player.template.subtitleSpecial.addEventListener('click', () => {
+                this.specialsubtitle = this.player.template.subtitleSpecialToggle.checked = !this.player.template.subtitleSpecialToggle.checked;
+                this.player.user.set("specialsubtitle", Number(this.specialsubtitle));
+                this.player.notice(`特效字幕： ${this.specialsubtitle ? '开启' : '关闭'}`);
+                this.specialsubtitle || location.reload();
+            });
+
+            if (!this.player.events.type('subtitle_end')) {
+                player.events.playerEvents.push('subtitle_end');
+            }
+            this.player.on('subtitle_end', () => {
+                this.add(this.player.options.subtitles);
+            });
+
+            this.player.on('quality_end', () => {
+                this.setVideo();
+                if (this.player.options.subtitle.url.length && this.player.options.subtitles.length) {
+                    this.switch(this.player.options.subtitles[this.player.options.subtitle.index]);
+                }
+                else {
+                    if (!this.hasSubtitleDisplay) {
+                        this.hasSubtitleDisplay = true;
+
+                        this.player.events.trigger('subtitle_start');
+                    }
+                }
+            });
+
+            this.player.on('episode_end', () => {
+                this.hasSubtitleTrack = false;
+                this.hasSubtitleDisplay = false;
+                this.clear();
+            });
+
+            this.player.template.mask.addEventListener('click', () => {
+                this.hide();
+            });
+
+            this.player.template.subtitleSettingBox = obj.append(this.player.template.controller, '<div class="dplayer-icons dplayer-comment-box subtitle-setting-box" style="bottom: 10px;left: auto;right: 400px !important;display: block;"><div class="dplayer-comment-setting-box"><div class="dplayer-comment-setting-color"><div class="dplayer-comment-setting-title">字幕颜色<button type="text" class="color-custom" style="line-height: 16px;font-size: 12px;top: 12px;right: 12px;color: #fff;background: rgba(28, 28, 28, 0.9);position: absolute;">自定义</button></div><label><input type="radio" name="dplayer-danmaku-color-1" value="#fff"><span style="background: #fff;"></span></label><label><input type="radio" name="dplayer-danmaku-color-1" value="#e54256"><span style="background: #e54256"></span></label><label><input type="radio" name="dplayer-danmaku-color-1" value="#ffe133"><span style="background: #ffe133"></span></label><label><input type="radio" name="dplayer-danmaku-color-1" value="#64DD17"><span style="background: #64DD17"></span></label><label><input type="radio" name="dplayer-danmaku-color-1" value="#39ccff"><span style="background: #39ccff"></span></label><label><input type="radio" name="dplayer-danmaku-color-1" value="#D500F9"><span style="background: #D500F9"></span></label></div><div class="dplayer-comment-setting-type"><div class="dplayer-comment-setting-title">字幕位置</div><label><input type="radio" name="dplayer-danmaku-type-1" value="1"><span>上移</span></label><label><input type="radio" name="dplayer-danmaku-type-1" value="0"><span>默认</span></label><label><input type="radio" name="dplayer-danmaku-type-1" value="2"><span>下移</span></label></div><div class="dplayer-comment-setting-type"><div class="dplayer-comment-setting-title">字幕大小</div><label><input type="radio" name="dplayer-danmaku-type-1" value="1"><span>加大</span></label><label><input type="radio" name="dplayer-danmaku-type-1" value="0"><span>默认</span></label><label><input type="radio" name="dplayer-danmaku-type-1" value="2"><span>减小</span></label></div><div class="dplayer-comment-setting-type"><div class="dplayer-comment-setting-title">字幕偏移<div style="margin-top: -30px;right: 14px;position: absolute;">偏移量<input type="number" class="subtitle-offset-step" style="height: 14px;width: 50px;margin-left: 4px;border: 1px solid #fff;border-radius: 3px;color: #fff;background: rgba(28, 28, 28, 0.9);text-align: center;" value="1" step="1" min="1"></div></div><label><input type="radio" name="dplayer-danmaku-type-1" value="1"><span>前移</span></label><label><span><input type="text" class="subtitle-offset" style="width: 94%;height: 14px;background: rgba(28, 28, 28, 0.9);border: 0px solid #fff;text-align: center;" value="0" title="双击恢复默认"></span></label><label><input type="radio" name="dplayer-danmaku-type-1" value="2"><span>后移</span></label></div><div class="dplayer-comment-setting-type"><div class="dplayer-comment-setting-title">更多字幕功能</div><label><input type="radio" name="dplayer-danmaku-type-1" value="1"><span>本地字幕</span></label><label><input type="radio" name="dplayer-danmaku-type-1" value="0"><span>待定</span></label><label><input type="radio" name="dplayer-danmaku-type-1" value="2"><span>待定</span></label></div></div></div>');
+            this.player.template.subtitleCommentSettingBox = obj.query('.dplayer-comment-setting-box', this.player.template.subtitleSettingBox);
+            this.player.template.subtitleSetting = obj.append(obj.query('.dplayer-setting-origin-panel', this.player.template.settingBox), '<div class="dplayer-setting-item dplayer-setting-subtitle"><span class="dplayer-label">字幕设置</span><div class="dplayer-toggle"><svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 32 32"><path d="M22 16l-10.105-10.6-1.895 1.987 8.211 8.613-8.211 8.612 1.895 1.988 8.211-8.613z"></path></svg></div></div>');
+            this.player.template.subtitleSetting.addEventListener('click', () => {
+                this.toggle();
+            });
+
+            this.player.template.subtitleColorPicker = obj.append(this.player.template.container, '<input type="color" id="colorPicker">');
+            this.player.template.subtitleColorCustom = obj.query('.color-custom', this.player.template.subtitleCommentSettingBox);
+            this.player.template.subtitleColorCustom.addEventListener('click', () => {
+                this.player.template.subtitleColorPicker.value = this.color;
+                this.player.template.subtitleColorPicker.click();
+            });
+            this.player.template.subtitleColorPicker.addEventListener('input', (event) => {
+                const color = event.target.value;
+                this.color = this.fromQColor(color);
+                this.player.notice(`设置字幕颜色: ${this.color}`);
+                this.setStyle({ PrimaryColour: this.color });
+            });
+
+            this.player.template.subtitleSettingColor = obj.query('.dplayer-comment-setting-color', this.player.template.subtitleCommentSettingBox);
+            this.player.template.subtitleSettingColor.addEventListener('click', (event) => {
+                if (event.target.nodeName === "INPUT") {
+                    const color = event.target.value;
+                    this.color = this.fromQColor(color);
+                    this.player.notice(`设置字幕颜色: ${this.color}`);
+                    this.setStyle({ PrimaryColour: this.color });
+                }
+            });
+
+            this.player.template.subtitleSettingItem = obj.queryAll('.dplayer-comment-setting-type', this.player.template.subtitleCommentSettingBox);
+            this.player.template.subtitleSettingItem[0].addEventListener('click', (event) => {
+                if (event.target.nodeName === "INPUT") {
+                    if (event.target.value == "1") {
+                        this.bottom += 1;
+                    }
+                    else if (event.target.value == "2") {
+                        this.bottom -= 1;
+                    }
+                    else {
+                        this.bottom = 10;
+                    }
+                    this.player.notice(`设置字幕位置: ${this.bottom}`);
+                    this.setStyle({ MarginV: this.bottom });
+                }
+            });
+
+            this.player.template.subtitleSettingItem[1].addEventListener('click', (event) => {
+                if (event.target.nodeName === "INPUT") {
+                    if (event.target.value == "1") {
+                        this.fontSize += 1;
+                    }
+                    else if (event.target.value == "2") {
+                        this.fontSize -= 1;
+                    }
+                    else {
+                        this.fontSize = 20;
+                    }
+                    this.player.notice(`设置字幕大小: ${this.fontSize}`);
+                    this.setStyle({ FontSize: this.fontSize });
+                }
+            });
+
+            this.player.template.subtitleOffsetStep = obj.query('.subtitle-offset-step', this.player.template.subtitleSettingItem[2]);
+            this.player.template.subtitleOffsetStep.addEventListener('input', (event) => {
+                this.offsetStep = event.target.value * 1;
+            });
+
+            this.player.template.subtitleOffset = obj.query('.subtitle-offset', this.player.template.subtitleSettingItem[2]);
+            this.player.template.subtitleOffset.addEventListener('input', (event) => {
+                this.offset = event.target.value * 1;
+                this.subtitleOffset();
+            });
+            this.player.template.subtitleOffset.addEventListener('dblclick', (event) => {
+                if (this.offset != 0) {
+                    this.offset = 0;
+                    event.target.value = 0;
+                    this.player.notice(`设置字幕偏移: ${this.offset}`);
+                    this.timeOffset();
+                }
+            });
+
+            this.player.template.subtitleSettingItem[2].addEventListener('click', (event) => {
+                if (event.target.nodeName === "INPUT") {
+                    if (event.target.type === "radio") {
+                        let value = this.player.template.subtitleOffset.value *= 1;
+                        if (event.target.value == "1") {
+                            value += this.offsetStep || 1;
+                        }
+                        else if (event.target.value == "2") {
+                            value -= this.offsetStep || 1;
+                        }
+                        else {
+                            value = 0;
+                        }
+                        this.offset = value;
+                        this.player.template.subtitleOffset.value = value;
+                        this.player.notice(`设置字幕偏移: ${this.offset}`);
+                        this.timeOffset();
+                    }
+                }
+            });
+
+            this.player.template.subtitleLocalFile = obj.append(this.player.template.container, '<input class="subtitleLocalFile" type="file" accept="webvtt,.vtt,.srt,.ssa,.ass" style="display: none;">');
+            this.player.template.subtitleSettingItem[3].addEventListener('click', (event) => {
+                if (event.target.nodeName === "INPUT") {
+                    if (event.target.value == "1") {
+                        this.player.template.subtitleLocalFile.click();
+                        this.hide();
+                    }
+                }
+            });
+            this.player.template.subtitleLocalFile.addEventListener("change", (event) => {
+                if (event.target.files.length) {
+                    const file = event.target.files[0];
+                    const file_ext = file.name.split(".").pop().toLowerCase();
+                    this.blobToText(file).then((stext) => {
+                        let subtitleOption = {
+                            stext,
+                            sext: file_ext,
+                            name: '本地字幕'
+                        };
+                        this.add([subtitleOption]);
+                        this.switch(subtitleOption);
+                    });
+                }
+                event.target.value = "";
+            });
+
+            this.player.events.trigger('subtitle_start');
+            this.player.on('destroy', () => {
+                this.destroy();
+            });
+        }
+
+        add(sublist) {
+            if (!(Array.isArray(sublist) && sublist.length)) {
+                return;
+            }
+            if (!(this.player.template.subtitlesBox && this.player.template.subtitlesItem.length)) {
+                return;
+            }
+            if (!this.player.template.subtitlesBoxPanel) {
+                this.player.template.subtitlesBoxPanel = this.player.template.subtitlesBox.querySelector('.dplayer-subtitles-panel');
+            }
+
+            const lastItemIndex = this.player.template.subtitlesItem.length - 1;
+            sublist.forEach((item, index) => {
+                const i = lastItemIndex + index;
+                this.player.options.subtitle.url.splice(i, 0, item);
+
+                let itemNode = document.createElement('div');
+                itemNode.setAttribute('class', 'dplayer-subtitles-item');
+                itemNode.innerHTML = '<span class="dplayer-label">' + (item.name + ' ' + (item.language || item.lang || "")) + '</span>';
+                this.player.template.subtitlesBoxPanel.insertBefore(itemNode, this.player.template.subtitlesBoxPanel.childNodes[i]);
+
+                itemNode.addEventListener('click', (event) => {
+                    this.player.subtitles.hide();
+                    if (this.player.options.subtitle.index !== i + 1) {
+                        this.player.options.subtitle.index = i + 1;
+                        this.switch(item);
+                    }
+                });
+            });
+            this.player.template.subtitlesItem = this.player.template.subtitlesBoxPanel.querySelectorAll('.dplayer-subtitles-item');
+
+            if (!this.hasSubtitleTrack) {
+                this.hasSubtitleTrack = true;
+
+                this.player.template.subtitlesItem[this.player.template.subtitlesItem.length - 1].addEventListener('click', (event) => {
+                    this.subContainerHide();
+                });
+
+                let index = this.player.options.subtitles.findIndex((item) => {
+                    return ['cho', 'zhi'].includes(item.language);
+                });
+                if (index < 0) {
+                    index = 0;
+                }
+                this.init(this.player.options.subtitle.url[index]);
+                this.player.options.subtitle.index = index + 1;
+            }
+        }
+
+        init(subtitleOption) {
+            return this.initLibass().then(() => {
+                return this.urlToText(subtitleOption).then((subtitleOption) => {
+                    if (!['ass', 'ssa'].includes(subtitleOption.sext)) {
+                        Object.assign(subtitleOption, { stext: this.toAss(subtitleOption.stext, subtitleOption.sext), sext: 'ass' });
+                    }
+                    this.switchContent(subtitleOption.stext);
+                    this.subContainerShow();
+                    return subtitleOption;
+                });
+            }).catch((error) => {
+                console.error("加载特效字幕组件 错误！", error);
+            });
+        }
+
+        switch(newOption = {}) {
+            return this.init(newOption).then(() => {
+                if (newOption.name) {
+                    this.player.notice(`切换字幕: ${newOption.name}`);
+                }
+            });
+        }
+
+        clear() {
+            this.player.options.subtitles = [];
+            this.player.options.subtitle.url = [];
+            for (let i = this.player.template.subtitlesItem.length - 2; i >= 0; i--) {
+                this.player.template.subtitlesBoxPanel.removeChild(this.player.template.subtitlesItem[i]);
+            }
+            this.player.template.subtitlesItem = this.player.template.subtitlesBoxPanel.querySelectorAll('.dplayer-subtitles-item');
+            this.destroy();
+        }
+
+        toggle() {
+            if (this.player.template.subtitleCommentSettingBox.classList.contains('dplayer-comment-setting-open')) {
+                this.hide();
+            } else {
+                this.show();
+            }
+        }
+
+        show() {
+            this.player.template.subtitleCommentSettingBox.classList.add('dplayer-comment-setting-open');
+            this.player.template.mask.classList.add('dplayer-mask-show');
+        }
+
+        hide() {
+            this.player.template.subtitleCommentSettingBox.classList.remove('dplayer-comment-setting-open');
+            this.player.template.settingBox.classList.remove('dplayer-setting-box-open');
+            this.player.template.mask.classList.remove('dplayer-mask-show');
+        }
+
+        initLibass() {
+            if (this.libass) return Promise.resolve(this.libass);
+
+            const options = {
+                video: this.player.template.video,
+                subContent: `[Script Info]\nScriptType: v4.00+`,
+                subUrl: '',
+                availableFonts: {
+                    '思源黑体 cn bold': 'https://cdn.jsdelivr.net/gh/tampermonkeyStorage/Self-use@main/Fonts/SourceHanSansCN-Bold.woff2',
+                }
+            };
+
+            return this.getLocalFonts().then(fontData => {
+                const fonts = fontData.filter(item => item.fullName.match(/[\u4e00-\u9fa5]/));
+                const fallbackFont = fonts.find(font => [
+                    '微软雅黑',
+                ].some(name => font?.fullName === name))?.fullName || fonts.sort(() => 0.5 - Math.random())[0]?.fullName;
+                Object.assign(options, {
+                    useLocalFonts: true,
+                    fallbackFont: fallbackFont,
+                });
+                return this.loadLibass(options);
+            }, () => {
+                Object.assign(options, {
+                    fallbackFont: Object.keys(options.availableFonts).pop(),
+                });
+                return this.loadLibass(options);
+            });
+        }
+
+        loadLibass(options) {
+            return this.loadJs('https://cdn.jsdelivr.net/npm/jassub/dist/jassub.umd.js').then(() => {
+                Object.assign(options, {
+                    workerUrl: 'https://cdn.jsdelivr.net/npm/jassub/dist/jassub-worker.js',
+                    wasmUrl: 'https://cdn.jsdelivr.net/npm/jassub/dist/jassub-worker.wasm',
+                    legacyWorkerUrl: 'https://cdn.jsdelivr.net/npm/jassub/dist/jassub-worker.wasm.js',
+                    modernWasmUrl: 'https://cdn.jsdelivr.net/npm/jassub/dist/jassub-worker-modern.wasm'
+                });
+                return this.loadWorker(options).then((workerUrl) => {
+                    options.workerUrl = workerUrl;
+                    this.libass = new unsafeWindow.JASSUB(options);
+                    return this.libass;
+                });
+            });
+        }
+
+        loadWorker({ workerUrl }) {
+            return fetch(workerUrl).then(res => res.text()).then(text => {
+                const workerBlob = new Blob([text], { type: "text/javascript" });
+                const workerScriptUrl = URL.createObjectURL(workerBlob);
+                setTimeout(() => {
+                    URL.revokeObjectURL(workerScriptUrl);
+                });
+                return workerScriptUrl;
+            });
+        }
+
+        setVideo(video) {
+            if (this.libass) {
+                this.libass.setVideo(video || this.player.template.video);
+            }
+        }
+
+        switchContent(content) {
+            if (this.libass && content) {
+                this.libass.freeTrack();
+                this.libass.setTrack(content);
+            }
+        }
+
+        subContainerShow() {
+            if (this.libass) {
+                (this.libass.canvasParent || this.libass._canvasParent).style.display = 'block';
+                this.libass.resize();
+            }
+        }
+
+        subContainerHide() {
+            if (this.libass) {
+                (this.libass.canvasParent || this.libass._canvasParent).style.display = 'none';
+            }
+        }
+
+        timeOffset(offset) {
+            if (this.libass) {
+                this.libass.timeOffset = offset || this.offset;
+            }
+        }
+
+        getStyles(callback) {
+            if (this.libass) {
+                this.libass.getStyles((error, styles) => {
+                    callback && callback(styles || error);
+                });
+            }
+            else {
+                callback && callback('');
+            }
+        }
+
+        setStyle(style, index = 1) {
+            if (this.libass) {
+                this.libass.setStyle(style, index);
+            }
+        }
+
+        destroy() {
+            if (this.libass) {
+                this.libass.destroy && this.libass.destroy();
+                this.libass.dispose && this.libass.dispose();
+                this.libass = null;
+            }
+        }
+
+        getLocalFonts(postscriptNames) {
+            if (unsafeWindow.queryLocalFonts) {
+                const options = {};
+                if (postscriptNames) {
+                    options.postscriptNames = Array.isArray(postscriptNames) ? postscriptNames : [postscriptNames]
+                }
+                return unsafeWindow.queryLocalFonts(options).then(fontData => {
+                    return fontData && fontData.length ? fontData : Promise.reject();
+                });
+            }
+            console.warn('Not Local fonts API');
+            return Promise.reject();
+        }
+
+        toAss(text, type) {
+            const subContent = type === 'ass' || type === 'ssa' ? text : '';
+            if (subContent) return subContent;
+
+            const srtRx = /(?:\d+\n)?(\d{0,2}:?\d{2}:\d{2}.\d{3})\s?-?->\s?(\d{0,2}:?\d{2}:\d{2}.\d{3})(.*)\n([\s\S]*)$/i;
+            const srt = text => {
+                const subtitles = [];
+                const replaced = text.replace(/\r/g, '');
+                const timeRx = /(\d{0,2})?:?(\d{2}):(\d{2}.\d{3})/;
+
+                for (const split of replaced.split('\n\n')) {
+                    const match = split.match(srtRx);
+                    if (match) {
+                        match[1] = match[1].replace(timeRx, (_match, hour, minute, second) => {
+                            return (hour || '0') + ':' + minute + ':' + second.match(/\d{2}.\d{2}/)[0].replace(',', '.');
+                        });
+                        match[2] = match[2].replace(timeRx, (_match, hour, minute, second) => {
+                            return (hour || '0') + ':' + minute + ':' + second.match(/\d{2}.\d{2}/)[0].replace(',', '.');
+                        });
+
+                        const matches = match[4].match(/<[^>]+>/g);
+                        if (matches) {
+                            matches.forEach(matched => {
+                                if (/<\//.test(matched)) { // check if its a closing tag
+                                    match[4] = match[4].replace(matched, matched.replace('</', '{\\').replace('>', '0}'));
+                                } else {
+                                    match[4] = match[4].replace(matched, matched.replace('<', '{\\').replace('>', '1}'));
+                                }
+                            })
+                        }
+
+                        subtitles.push('Dialogue: 0,' + match[1] + ',' + match[2] + ',Default,,0,0,0,,' + match[4].replace(/\n/g, '\\N'));
+                    }
+                }
+                return subtitles.join('\n');
+            };
+
+            const options = {
+                scriptInfo: {
+                    Title: "untitled",
+                    ScriptType: "v4.00+",
+                    Collisions: "Normal",
+                    PlayDepth: 0,
+                    Timer: "100,0000",
+                    PlayResX: "",
+                    PlayResY: "",
+                    WrapStyle: 0,
+                    ScaledBorderAndShadow: "no"
+                },
+                v4Styles: [
+                    {
+                        Name: "Default",
+                        Fontname: "Default",
+                        Fontsize: 20,
+                        PrimaryColour: "&H00FFFFFF",
+                        SecondaryColour: "&H00FFFFFF",
+                        OutlineColour: "&H00000000",
+                        BackColour: "&H00000000",
+                        Bold: -1,
+                        Italic: 0,
+                        Underline: 0,
+                        StrikeOut: 0,
+                        ScaleX: 100,
+                        ScaleY: 100,
+                        Spacing: 0,
+                        Angle: 0,
+                        BorderStyle: 1,
+                        Outline: 1,
+                        Shadow: 0,
+                        Alignment: 2,
+                        MarginL: 10,
+                        MarginR: 10,
+                        MarginV: 10,
+                        Encoding: 1
+                    },
+                ]
+            };
+            const headers = ['[Script Info]'];
+            for (let [key, value] of Object.entries(options.scriptInfo)) {
+                headers.push(key + ": " + value);
+            }
+            headers.push('');
+            headers.push('[V4+ Styles]');
+            headers.push('Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding');
+            options.v4Styles.forEach((styles) => {
+                if (typeof styles === 'object') {
+                    headers.push("Style: " + Object.values(styles).join(','));
+                } else if (typeof styles === 'string') {
+                    headers.push(styles);
+                }
+            });
+            headers.push('');
+            headers.push('[Events]');
+            headers.push('Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text');
+            headers.push('');
+
+            const assHeader = headers.join('\n');
+            switch (type) {
+                case 'vtt':
+                case 'srt': {
+                    return assHeader + srt(text);
+                }
+                case 'ssa':
+                case 'ass': {
+                    return subContent;
+                }
+                default:
+                    if (srtRx.test(text)) return assHeader + srt(text);
+                    return '';
+            }
+        }
+
+        urlToText(subtitleOption) {
+            if (subtitleOption.stext) {
+                return Promise.resolve(subtitleOption);
+            }
+            else {
+                subtitleOption.sext || (subtitleOption.sext = subtitleOption.file_extension);
+                const url = subtitleOption.url || subtitleOption.download_url || subtitleOption.uri || subtitleOption.surl;
+                return this.requestFile(url).then((text) => {
+                    subtitleOption.stext = text;
+                    return subtitleOption;
+                });
+            }
+        }
+
+        requestFile(url) {
+            return fetch(url, {
+                referrer: location.protocol + "//" + location.host + "/",
+                referrerPolicy: "origin",
+                body: null,
+                method: "GET",
+                mode: "cors",
+                credentials: "omit"
+            }).then(data => data.blob()).then(blob => {
+                return this.blobToText(blob);
+            });
+        };
+
+        blobToText(blob) {
+            return new Promise(function (resolve, reject) {
+                var reader = new FileReader();
+                reader.readAsText(blob, "UTF-8");
+                reader.onload = function (e) {
+                    var result = reader.result;
+                    if (result.indexOf("�") > -1 && !reader.markGBK) {
+                        reader.markGBK = true;
+                        return reader.readAsText(blob, "GBK");
+                    }
+                    else if (result.indexOf("") > -1 && !reader.markBIG5) {
+                        reader.markBIG5 = true;
+                        return reader.readAsText(blob, "BIG5");
+                    }
+                    resolve(result);
+                };
+                reader.onerror = function (error) {
+                    reject(error);
+                };
+            });
+        }
+
+        fromQColor(color, invert = false) {
+            color = color.replace(/^#?([a-f\d])([a-f\d])([a-f\d])$/i, (m, r, g, b) => {
+                return r + r + g + g + b + b;
+            });
+            const alpha = 0xffff;
+            const [_, red, green, blue] = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(color);
+            if (!invert) return '0x' + red << 24 | '0x' + green << 16 | '0x' + blue << 8 | (~alpha & 0xFF);
+            return (~'0x' + red & 0xFF) << 24 | (~'0x' + green & 0xFF) << 16 | (~'0x' + blue & 0xFF) << 8 | (~alpha & 0xFF);
+        }
+    },
     class Appreciation {
         constructor(player, obj) {
             this.player = player;
             this.now = Date.now();
-            this.localforage = window.localforage;
+            this.localforage = window.localforage || unsafeWindow.localforage;
 
             const { contextmenu,
                 container: { offsetWidth, offsetHeight }
@@ -1209,7 +1871,9 @@ window.dpPlugins = window.dpPlugins || function (t) {
 
         }
     },
-    class doHotKey {
+        
+        
+    class DoHotKey {
         constructor(player) {
             this.player = player;
 
