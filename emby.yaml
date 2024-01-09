@@ -4,7 +4,7 @@ payload:
 #  - PROCESS-NAME,electron.exe
   - DOMAIN-KEYWORD,emby
   - DOMAIN-SUFFIX,emby.riches.cloud
-  - DOMAIN-SUFFIX,emby.misakaf.xyz
+  - DOMAIN-SUFFIX,emby.misakaf.org
   - DOMAIN-SUFFIX,embyaz.misakaf.xyz
   - DOMAIN-SUFFIX,emby.milkcat.net
   - DOMAIN-SUFFIX,pornemby.maoxiong.cloud
