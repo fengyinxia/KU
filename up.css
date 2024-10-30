@@ -1,0 +1,118 @@
+ /* 基础样式重置 */
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+
+        /* 阅读容器 */
+        .custom-reader-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: #f6f4ef;
+            z-index: 9999;
+            overflow-y: auto;
+            padding: 20px;
+            transition: all 0.3s ease;
+        }
+
+        /* 阅读内容区 */
+        .custom-reader-content {
+            width: 800px;
+            margin: 0 auto;
+            background: #fff;
+            padding: 40px 80px;
+            box-shadow: 0 0 20px rgba(0,0,0,0.05);
+            border-radius: 3px;
+            min-height: calc(100% - 80px);
+        }
+
+        /* 章节标题 */
+        .custom-chapter-title {
+            font-size: 28px;
+            font-weight: bold;
+            text-align: center;
+            margin-bottom: 40px;
+            color: #333;
+        }
+
+        /* 正文内容 */
+        .custom-content {
+            font-size: 18px;
+            line-height: 1.8;
+            color: #333;
+            font-family: "Microsoft YaHei", sans-serif;
+            letter-spacing: 0.5px;
+        }
+
+        .custom-content p {
+            margin-bottom: 1em;
+            text-indent: 2em;
+        }
+
+        /* 工具栏 */
+        .custom-toolbar {
+            position: fixed;
+            left: 30px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: #fff;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+            z-index: 10000;
+        }
+
+        .custom-toolbar button {
+            display: block;
+            width: 40px;
+            height: 40px;
+            margin: 5px 0;
+            border: none;
+            background: #f4f4f4;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-size: 14px;
+        }
+
+        .custom-toolbar button:hover {
+            background: #e6e6e6;
+        }
+
+        /* 暗色主题 */
+        .dark-mode .custom-reader-content {
+            background: #1a1a1a;
+            color: #ccc;
+        }
+
+        .dark-mode .custom-chapter-title {
+            color: #fff;
+        }
+
+        .dark-mode .custom-content {
+            color: #ccc;
+        }
+
+        /* 滚动条美化 */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #888;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #555;
+        }
