@@ -9,19 +9,13 @@ window.alipanArtPlugins =
           e.readyM3u8Parser(),
         ]).then(() => e.initArtplayer(t)),
       readyHls: function () {
-        return window.Hls || unsafeWindow.Hls
-          ? Promise.resolve()
-          : e.loadJs("https://unpkg.com/hls.js/dist/hls.min.js");
+        return e.loadJs("https://cdn.jsdelivr.net/npm/hls.js@latest");
       },
       readyArtplayer: function () {
-        return window.Artplayer || unsafeWindow.Artplayer
-          ? Promise.resolve()
-          : e.loadJs("https://unpkg.com/artplayer/dist/artplayer.js");
+        return e.loadJs("https://cdn.jsdelivr.net/npm/artplayer@latest");
       },
       readyM3u8Parser: function () {
-        return window.m3u8Parser || unsafeWindow.m3u8Parser
-          ? Promise.resolve()
-          : e.loadJs("https://unpkg.com/m3u8-parser/dist/m3u8-parser.min.js");
+        return e.loadJs("https://cdn.jsdelivr.net/npm/m3u8-parser@latest");
       },
       initArtplayer: function (n) {
         if (
