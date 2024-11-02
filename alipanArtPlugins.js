@@ -1,5 +1,4 @@
 window.alipanArtPlugins =
-  window.alipanArtPlugins ||
   (function (t) {
     var e = {
       version: "1.0.2",
@@ -55,18 +54,7 @@ window.alipanArtPlugins =
             autoplay: !0,
             autoPlayback: !0,
             aspectRatio: !0,
-            contextmenu: [
-              {
-                html: "检查更新",
-                click: function (t, e) {
-                  window.open(
-                    "https://scriptcat.org/zh-CN/script-show-page/162",
-                    "_blank"
-                  ),
-                    (t.show = !1);
-                },
-              }
-            ],
+            contextmenu: [],
             customType: {
               hls: function (t, e, n) {
                 const s = window.Hls || unsafeWindow.Hls;
@@ -187,15 +175,7 @@ window.alipanArtPlugins =
         );
       },
     };
-    return (
-      console.info(
-        `%c alipanArtPlugins %c ${e.version} %c https://scriptcat.org/zh-CN/users/13895`,
-        "color: #fff; background: #5f5f5f",
-        "color: #fff; background: #4bc729",
-        ""
-      ),
-      e
-    );
+    return e;
   })([
     function () {
       return (t) => {
@@ -507,7 +487,7 @@ window.alipanArtPlugins =
                   var i = s.result;
                   return i.indexOf("�") > -1 && !s.markGBK
                     ? ((s.markGBK = !0), s.readAsText(t, "GBK"))
-                    : i.indexOf("") > -1 && !s.markBIG5
+                    : i.indexOf("") > -1 && !s.markBIG5
                     ? ((s.markBIG5 = !0), s.readAsText(t, "BIG5"))
                     : void e(i);
                 }),
